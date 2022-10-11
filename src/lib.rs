@@ -39,7 +39,7 @@ methods!(
 
         let ruby_string = mysql_url.map_err(|e| VM::raise_ex(e)).unwrap();
         // let url = ruby_string.to_str();
-        let url = "mysql://root:root@127.0.0.1:3306/themis_development_1";
+        let url = "mysql://username:password@127.0.0.1:<port>/db_name";
         // let pool = Pool::new(url).unwrap();
         match Pool::new(url) {
             Ok(_) => {},
