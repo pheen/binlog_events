@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
+require "rutie"
 require_relative "binlog_events/version"
 
 module BinlogEvents
-  class Error < StandardError; end
-  # Your code goes here...
+  Rutie.new(:binlog_events).init("Init_binlog_events", __dir__)
 end
