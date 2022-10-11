@@ -1,3 +1,5 @@
+![cdc logo](https://user-images.githubusercontent.com/1145873/195001971-9e684f9c-757e-480c-bba1-1af8a8b61f85.png)
+
 # BinlogEvents
 
 Welcome to your new gem! In this directory, you'll find the files you need to be able to package up your Ruby library into a gem. Put your Ruby code in the file `lib/binlog_events`. To experiment with that code, run `bin/console` for an interactive prompt.
