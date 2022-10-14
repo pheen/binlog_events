@@ -1,8 +1,12 @@
-# frozen_string_literal: true
-
-require "rutie"
 require_relative "binlog_events/version"
+require "socket"
 
 module BinlogEvents
-  Rutie.new(:binlog_events).init("Init_binlog_events", __dir__)
+  def self.listen(mysql_url)
+    sock = TCPSocket.new("127.0.0.1", 23578)
+
+    while line = sock.gets
+      puts line
+    end
+  end
 end
