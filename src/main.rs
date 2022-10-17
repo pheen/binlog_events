@@ -1,63 +1,63 @@
 use std::collections::HashMap;
+use std::io::Read;
 use std::ops::Index;
 use std::str::from_utf8;
 
-use mysql::*;
-use mysql::binlog::events::{EventData, RowsEventData};
+use mysql::binlog::events::{EventData, RowsEventData, RowsEvent};
+use mysql::binlog::value::BinlogValue;
 use mysql::prelude::*;
+use mysql::*;
 
-use tokio::net::TcpListener;
+use mysql::serde_json::json;
 use tokio::io::AsyncWriteExt;
+use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
+    println!("Hello!");
+
     let listener = TcpListener::bind("127.0.0.1:23578").await?;
 
     loop {
         let (mut socket, _) = listener.accept().await?;
 
         tokio::spawn(async move {
-            let url = "mysql://root:root@127.0.0.1:3306/themis_development_1";
+            let url = "mysql://username:password@127.0.0.1:1234/db_name";
             let pool = Pool::new(url).unwrap();
             let mut conn = pool.get_conn().unwrap();
 
             // "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION",
-            let query_results = conn.query_iter("SELECT TABLE_NAME, COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS ORDER BY ORDINAL_POSITION").unwrap();
-            let mut table_columns_map = HashMap::new();
+            let query_results = conn.query_iter("SELECT DISTINCT TABLE_NAME, COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'themis_development_1' ORDER BY ORDINAL_POSITION").unwrap();
+            let mut table_columns_map: HashMap<String, Vec<String>> = HashMap::new();
 
             for query_result in query_results {
                 let result = query_result.unwrap();
 
-                let table_name_result = result.index(0).clone();
-                let column_name_result = result.index(1).clone();
+                if let Value::Bytes(table_name) = &result.index(0) {
+                    if let Value::Bytes(column_name) = &result.index(1) {
+                        let table_name = from_utf8(table_name).unwrap();
+                        let column_name = from_utf8(column_name).unwrap();
 
+                        let unknown_table = !&table_columns_map.contains_key(table_name);
 
-
-                if let Value::Bytes(table_name) = table_name_result {
-                    if let Value::Bytes(column_name) = column_name_result {
-                        // let b = table_name.clone(); // b: &Vec<u8>
-                        // let table_name: &[u8] = &b; // c: &[u8]
-                        // let column_name: &[u8] = &column_name.clone(); // c: &[u8]
-
-                        let table_name = from_utf8(&table_name).unwrap();
-                        let column_name = from_utf8(&column_name).unwrap();
-
-
-                        if table_columns_map.contains_key(table_name) {
-                            let mut columns: Vec<String> = Vec::new();
-                            table_columns_map.insert(table_name, columns);
+                        if unknown_table {
+                            let columns: Vec<String> = vec![column_name.to_string()];
+                            table_columns_map.insert(table_name.to_string(), columns);
+                        } else {
+                            let columns = table_columns_map.get_mut(table_name).unwrap();
+                            columns.push(column_name.to_string());
                         }
 
-                        // table_columns_map
+                        let table_data = table_columns_map.get_key_value(table_name).unwrap();
+                        let table_data_bytes = format!("{:#?}", table_data).to_string();
+                        let table_data_bytes = table_data_bytes.as_bytes();
 
-                        // table_columns_map. .insert(table_name)
-
-                        // if let Err(e) = socket.write_all(table_name).await {
-                        //     eprintln!("failed to write to socket; err = {:?}", e);
-                        // }
-                        // if let Err(e) = socket.write_all(b"\n").await {
-                        //     eprintln!("failed to write to socket; err = {:?}", e);
-                        // }
+                        if let Err(e) = socket.write_all(table_data_bytes).await {
+                            eprintln!("failed to write to socket; err = {:?}", e);
+                        }
+                        if let Err(e) = socket.write_all(b"\n").await {
+                            eprintln!("failed to write to socket; err = {:?}", e);
+                        }
                     }
                 }
             }
@@ -65,135 +65,125 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
             let request = BinlogRequest::new(1337);
             let mut binlog_stream = conn.get_binlog_stream(request).unwrap();
 
-            while let Some(event) = binlog_stream.next() {
-                let ev = event.unwrap();
-                // event.header().event_type().unwrap();
+            let mut table_maps: HashMap<u64, binlog::events::TableMapEvent> = HashMap::new();
 
-                let mut tmes = HashMap::new();
+            while let Some(binlog_data) = binlog_stream.next() {
+                let ev = binlog_data.unwrap();
 
-                if let Some(EventData::TableMapEvent(data)) = ev.read_data().unwrap() {
-                    tmes.insert(data.table_id(), data.into_owned());
-                }
+                if let Some(thing) = ev.read_data().unwrap() {
+                    match thing {
+                        EventData::TableMapEvent(data) => {
+                            table_maps.insert(data.table_id(), data.into_owned());
+                        },
+                        EventData::RowsEvent(data) => {
+                            match data {
+                                RowsEventData::WriteRowsEvent(row_data) => {
 
-                if let Some(EventData::RowsEvent(data)) = ev.read_data().unwrap() {
-                    let table_map_event = &tmes[&data.table_id()];
+                                },
+                                RowsEventData::UpdateRowsEvent(row_data) => {
+                                    let table_map = table_maps.get(&row_data.table_id()).unwrap();
+                                    let table_name = &table_map.table_name().to_string();
 
-                    for row in data.rows(table_map_event) {
-                        let (before, after) = row.unwrap();
-                        match data {
-                            RowsEventData::WriteRowsEvent(_) => {
-                                // assert!(before.is_none());
-                                // let after = after.unwrap().unwrap();
-                                // let mut j = 0;
-                                // for v in after {
-                                //     j += 1;
-                                //     match j {
-                                //         1 => assert_eq!(v, BinlogValue::Value("0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789".into())),
-                                //         2 => assert_eq!(v, BinlogValue::Value("0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456780123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456780123456789012345678901234567890123456789".into())),
-                                //         3 => assert_eq!(v, BinlogValue::Value(1_i8.into())),
-                                //         4 => assert_eq!(v, BinlogValue::Value([0b00000101_u8].into())),
-                                //         5 => assert_eq!(v, BinlogValue::Value("0123456789".into())),
+                                    println!("table_name: {}", table_name);
 
-                                //         _ => panic!(),
-                                //     }
-                                // }
-                                // assert_eq!(j, 5);
+                                    if let Some(table_columns) = table_columns_map.get(table_name) {
+                                        // println!("row_data:");
+
+                                        for row in row_data.rows(table_map) {
+                                            let (before, after) = row.unwrap();
+
+                                            let before_row = before.unwrap();
+                                            let before = &before_row.unwrap();
+
+                                            let after_row = after.unwrap();
+                                            let after = &after_row.unwrap();
+
+                                            let mut result_hash = HashMap::new();
+                                            let mut id_serialized_value: String = "".to_string();
+
+                                            result_hash.insert("table_name", table_name);
+
+                                            let id_column_index = table_columns
+                                                .iter()
+                                                .position(|name| name == "id")
+                                                .unwrap();
+
+                                            // let id_ref = after_row.as_ref(id_column_index).unwrap();
+
+                                            // match id_ref {
+                                            //     BinlogValue::Value(id_value) => {
+                                            //         match *id_value {
+                                            //             Value::Int(id) => {
+                                            //                 id_serialized_value.push_str(&id.to_string());
+                                            //                 result_hash.insert("id", &id_serialized_value);
+                                            //             },
+                                            //             _ => {}
+                                            //         }
+                                            //     },
+                                            //     _ => {},
+                                            // }
+
+                                            let mut changes_hash = HashMap::new();
+
+                                            for (idx, after_binlog_value) in after.iter().enumerate() {
+                                                let before_binlog_value = before.get(idx).unwrap_or_else(|| &BinlogValue::Value(Value::NULL));
+
+                                                let before_state = match before_binlog_value {
+                                                    BinlogValue::Value(before_value) => {
+                                                        match before_value {
+                                                            Value::NULL => { "".to_string() },
+                                                            Value::Bytes(value) => { from_utf8(value.as_slice()).unwrap().to_string() },
+                                                            Value::Int(value) => { value.to_string() },
+                                                            Value::UInt(value) => { value.to_string() },
+                                                            Value::Float(value) => { value.to_string() },
+                                                            Value::Double(value) => { value.to_string() },
+                                                            Value::Date(y, mo, d, h, m, s, ms) => { format!("{}, {}, {}, {}, {}, {}, {}", y, mo, d, h, m, s, ms).to_string() },
+                                                            Value::Time(signed, d, h, m, s, ms) => { format!("{}, {}, {}, {}, {}, {}", signed, d, h, m, s, ms).to_string() },
+                                                        }
+                                                    },
+                                                    _ => { "".to_string() }
+                                                };
+
+                                                let after_state = match after_binlog_value {
+                                                    BinlogValue::Value(after_value) => {
+                                                        match after_value {
+                                                            Value::NULL => { "".to_string() },
+                                                            Value::Bytes(value) => { from_utf8(value.as_slice()).unwrap().to_string() },
+                                                            Value::Int(value) => { value.to_string() },
+                                                            Value::UInt(value) => { value.to_string() },
+                                                            Value::Float(value) => { value.to_string() },
+                                                            Value::Double(value) => { value.to_string() },
+                                                            Value::Date(y, mo, d, h, m, s, ms) => { format!("{}, {}, {}, {}, {}, {}, {}", y, mo, d, h, m, s, ms).to_string() },
+                                                            Value::Time(signed, d, h, m, s, ms) => { format!("{}, {}, {}, {}, {}, {}", signed, d, h, m, s, ms).to_string() },
+                                                        }
+                                                    },
+                                                    _ => { "".to_string() }
+                                                };
+
+                                                let column_name = table_columns.get(idx).unwrap();
+
+                                                if before_state != after_state {
+                                                    let column_changes = vec![before_state, after_state];
+                                                    changes_hash.insert(column_name, column_changes);
+                                                }
+                                            }
+
+                                            let changes_json = json!(changes_hash).to_string();
+                                            result_hash.insert("changes", &changes_json);
+
+                                            println!("{:#?}", &result_hash);
+                                        }
+                                    } else {
+                                        println!("[Error] Update for unknown table: {:#?}", table_name);
+                                    }
+                                },
+                                RowsEventData::DeleteRowsEvent(row_data) => {
+
+                                },
+                                _ => {}
                             }
-                            RowsEventData::UpdateRowsEvent(_) => {
-                                if let Some(val) = before {
-                                    let table_name = table_map_event.table_name();
-                                    // let mut column_names: Vec<&str> = Vec::new();
-
-                                    // if let Some(names) = table_column_names.get(&table_name) {
-                                    //     // for name in
-                                    // } else {
-                                    //     column_names.push("hi");
-                                    //     table_column_names.insert(table_name, column_names);
-                                    // };
-
-                                    // println!("{:#?}", column_names);
-
-
-                                    // for value in val.unwrap() {
-                                    //     row_map.insert(index, value);
-                                    //     index += 1;
-                                    // }
-
-                                    // println!("{:#?}", row_map);
-
-                                    // val.columns()
-                                    // let values = val.unwrap();
-
-                                    // for col in val.columns_ref() {
-                                    //     let wut = table_map_event.get_column_type(col_idx) .get_column_metadata(index).unwrap();
-
-                                    //     index += 1;
-
-                                    //     println!("{:#?}", wut);
-                                    // }
-
-
-                                    // for col in data.columns_before_image() {
-                                    //     println!("{:#?}", col.);
-                                    // }
-
-                                }
-
-                                // for val in before {
-                                //     println!("{:#?}", val);
-                                // }
-
-                                // let before = before.unwrap().unwrap();
-                                // let mut j = 0;
-                                // for v in before {
-                                //     j += 1;
-                                //     match j {
-                                //         1 => assert_eq!(v, BinlogValue::Value("0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789".into())),
-                                //         2 => assert_eq!(v, BinlogValue::Value("0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456780123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456780123456789012345678901234567890123456789".into())),
-                                //         3 => assert_eq!(v, BinlogValue::Value(1_i8.into())),
-                                //         4 => assert_eq!(v, BinlogValue::Value([0b00000101_u8].into())),
-                                //         5 => assert_eq!(v, BinlogValue::Value("0123456789".into())),
-
-                                //         _ => panic!(),
-                                //     }
-                                // }
-                                // assert_eq!(j, 5);
-
-                                // let after = after.unwrap().unwrap();
-                                // let mut j = 0;
-                                // for v in after {
-                                //     j += 1;
-                                //     match j {
-                                //         1 => assert_eq!(v, BinlogValue::Value("field1".into())),
-                                //         2 => assert_eq!(v, BinlogValue::Value("field_2".into())),
-                                //         3 => assert_eq!(v, BinlogValue::Value(2_i8.into())),
-                                //         4 => assert_eq!(v, BinlogValue::Value([0b00001010_u8].into())),
-                                //         5 => assert_eq!(v, BinlogValue::Value("0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456780123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456780123456789012345678901234567890123456789".into())),
-                                //         _ => panic!(),
-                                //     }
-                                // }
-                                // assert_eq!(j, 5);
-                            }
-                            RowsEventData::DeleteRowsEvent(_) => {
-                                // assert!(after.is_none());
-
-                                // let before = before.unwrap().unwrap();
-                                // let mut j = 0;
-                                // for v in before {
-                                //     j += 1;
-                                //     match j {
-                                //         1 => assert_eq!(v, BinlogValue::Value("field1".into())),
-                                //         2 => assert_eq!(v, BinlogValue::Value("field_2".into())),
-                                //         3 => assert_eq!(v, BinlogValue::Value(2_i8.into())),
-                                //         4 => assert_eq!(v, BinlogValue::Value([0b00001010_u8].into())),
-                                //         5 => assert_eq!(v, BinlogValue::Value("0123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456780123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456780123456789012345678901234567890123456789".into())),
-                                //         _ => panic!(),
-                                //     }
-                                // }
-                                // assert_eq!(j, 5);
-                            }
-                            _ => panic!(),
-                        }
+                        },
+                        _ => {}
                     }
                 }
             }
