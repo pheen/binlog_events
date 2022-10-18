@@ -12,6 +12,41 @@ use mysql::serde_json::json;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 
+extern crate serde;
+#[macro_use]
+extern crate serde_derive;
+extern crate rmp_serde as rmps;
+
+use serde::{Deserialize, Serialize};
+use rmps::{Deserializer, Serializer};
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+enum IntegerValue {
+    U64(u64),
+    I64(i64)
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+enum FloatValue {
+    F32(f32),
+    F64(f64)
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+enum ChangesValue {
+    Str(String),
+    Int(IntegerValue),
+    Float(FloatValue)
+}
+
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+struct Event {
+    action: String,
+    table_name: String,
+    id: String,
+    changes: HashMap<String, Vec<ChangesValue>>
+}
+
 #[tokio::main]
 async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
     println!("Hello!");
@@ -87,16 +122,13 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
                                     println!("table_name: {}", table_name);
 
                                     if let Some(table_columns) = table_columns_map.get(table_name) {
-                                        // println!("row_data:");
-
                                         for row in row_data.rows(table_map) {
                                             let (before, after) = row.unwrap();
 
                                             let before_row = before.unwrap();
-                                            let before = &before_row.unwrap();
+                                            let before_state = &before_row.unwrap();
 
                                             let after_row = after.unwrap();
-                                            let after = &after_row.unwrap();
 
                                             let mut result_hash = HashMap::new();
                                             let mut id_serialized_value: String = "".to_string();
@@ -108,70 +140,94 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
                                                 .position(|name| name == "id")
                                                 .unwrap();
 
-                                            // let id_ref = after_row.as_ref(id_column_index).unwrap();
+                                            let id_ref = after_row.as_ref(id_column_index).unwrap();
 
-                                            // match id_ref {
-                                            //     BinlogValue::Value(id_value) => {
-                                            //         match *id_value {
-                                            //             Value::Int(id) => {
-                                            //                 id_serialized_value.push_str(&id.to_string());
-                                            //                 result_hash.insert("id", &id_serialized_value);
-                                            //             },
-                                            //             _ => {}
-                                            //         }
-                                            //     },
-                                            //     _ => {},
-                                            // }
+                                            match id_ref {
+                                                BinlogValue::Value(id_value) => {
+                                                    match *id_value {
+                                                        Value::Int(id) => {
+                                                            id_serialized_value.push_str(&id.to_string());
+                                                            result_hash.insert("id", &id_serialized_value);
+                                                        },
+                                                        _ => {}
+                                                    }
+                                                },
+                                                _ => {},
+                                            }
 
                                             let mut changes_hash = HashMap::new();
 
-                                            for (idx, after_binlog_value) in after.iter().enumerate() {
-                                                let before_binlog_value = before.get(idx).unwrap_or_else(|| &BinlogValue::Value(Value::NULL));
+                                            for (idx, after_binlog_value) in after_row.unwrap().iter().enumerate() {
+                                                let before_binlog_value = before_state.get(idx).unwrap_or_else(|| &BinlogValue::Value(Value::NULL));
 
                                                 let before_state = match before_binlog_value {
                                                     BinlogValue::Value(before_value) => {
                                                         match before_value {
-                                                            Value::NULL => { "".to_string() },
-                                                            Value::Bytes(value) => { from_utf8(value.as_slice()).unwrap().to_string() },
-                                                            Value::Int(value) => { value.to_string() },
-                                                            Value::UInt(value) => { value.to_string() },
-                                                            Value::Float(value) => { value.to_string() },
-                                                            Value::Double(value) => { value.to_string() },
-                                                            Value::Date(y, mo, d, h, m, s, ms) => { format!("{}, {}, {}, {}, {}, {}, {}", y, mo, d, h, m, s, ms).to_string() },
-                                                            Value::Time(signed, d, h, m, s, ms) => { format!("{}, {}, {}, {}, {}, {}", signed, d, h, m, s, ms).to_string() },
+                                                            Value::NULL => { ChangesValue::Str("".into()) },
+                                                            Value::Bytes(value) => { ChangesValue::Str(from_utf8(value.as_slice()).unwrap().to_string()) },
+                                                            Value::Int(value) => { ChangesValue::Int(IntegerValue::I64(*value)) },
+                                                            Value::UInt(value) => { ChangesValue::Int(IntegerValue::U64(*value)) },
+                                                            Value::Float(value) => { ChangesValue::Float(FloatValue::F32(*value)) },
+                                                            Value::Double(value) => { ChangesValue::Float(FloatValue::F64(*value)) },
+                                                            Value::Date(y, mo, d, h, m, s, ms) => {
+                                                                let date = format!("{}, {}, {}, {}, {}, {}, {}", y, mo, d, h, m, s, ms).to_string();
+                                                                ChangesValue::Str(date)
+                                                            },
+                                                            Value::Time(signed, d, h, m, s, ms) => {
+                                                                let date = format!("{}, {}, {}, {}, {}, {}", signed, d, h, m, s, ms).to_string();
+                                                                ChangesValue::Str(date)
+                                                            },
                                                         }
                                                     },
-                                                    _ => { "".to_string() }
+                                                    _ => { ChangesValue::Str("".into()) }
                                                 };
 
                                                 let after_state = match after_binlog_value {
                                                     BinlogValue::Value(after_value) => {
                                                         match after_value {
-                                                            Value::NULL => { "".to_string() },
-                                                            Value::Bytes(value) => { from_utf8(value.as_slice()).unwrap().to_string() },
-                                                            Value::Int(value) => { value.to_string() },
-                                                            Value::UInt(value) => { value.to_string() },
-                                                            Value::Float(value) => { value.to_string() },
-                                                            Value::Double(value) => { value.to_string() },
-                                                            Value::Date(y, mo, d, h, m, s, ms) => { format!("{}, {}, {}, {}, {}, {}, {}", y, mo, d, h, m, s, ms).to_string() },
-                                                            Value::Time(signed, d, h, m, s, ms) => { format!("{}, {}, {}, {}, {}, {}", signed, d, h, m, s, ms).to_string() },
+                                                            Value::NULL => { ChangesValue::Str("".into()) },
+                                                            Value::Bytes(value) => { ChangesValue::Str(from_utf8(value.as_slice()).unwrap().to_string()) },
+                                                            Value::Int(value) => { ChangesValue::Int(IntegerValue::I64(*value)) },
+                                                            Value::UInt(value) => { ChangesValue::Int(IntegerValue::U64(*value)) },
+                                                            Value::Float(value) => { ChangesValue::Float(FloatValue::F32(*value)) },
+                                                            Value::Double(value) => { ChangesValue::Float(FloatValue::F64(*value)) },
+                                                            Value::Date(y, mo, d, h, m, s, ms) => {
+                                                                let date = format!("{}, {}, {}, {}, {}, {}, {}", y, mo, d, h, m, s, ms).to_string();
+                                                                ChangesValue::Str(date)
+                                                            },
+                                                            Value::Time(signed, d, h, m, s, ms) => {
+                                                                let date = format!("{}, {}, {}, {}, {}, {}", signed, d, h, m, s, ms).to_string();
+                                                                ChangesValue::Str(date)
+                                                            },
                                                         }
                                                     },
-                                                    _ => { "".to_string() }
+                                                    _ => { ChangesValue::Str("".into()) }
                                                 };
 
                                                 let column_name = table_columns.get(idx).unwrap();
 
                                                 if before_state != after_state {
                                                     let column_changes = vec![before_state, after_state];
-                                                    changes_hash.insert(column_name, column_changes);
+                                                    changes_hash.insert(column_name.to_string(), column_changes);
                                                 }
                                             }
 
-                                            let changes_json = json!(changes_hash).to_string();
-                                            result_hash.insert("changes", &changes_json);
+                                            let mut buf = Vec::new();
+                                            let event = Event {
+                                                action: "update".into(),
+                                                table_name: result_hash.get("table_name").unwrap().to_string(),
+                                                id: result_hash.get("id").unwrap().to_string(),
+                                                changes: changes_hash
+                                            };
 
-                                            println!("{:#?}", &result_hash);
+                                            event.serialize(&mut Serializer::new(&mut buf)).unwrap();
+
+                                            if let Err(e) = socket.write_all(&buf.clone()).await {
+                                                eprintln!("failed to write to socket; err = {:?}", e);
+                                            }
+                                            if let Err(e) = socket.write_all(b"\n").await {
+                                                eprintln!("failed to write to socket; err = {:?}", e);
+                                            }
                                         }
                                     } else {
                                         println!("[Error] Update for unknown table: {:#?}", table_name);

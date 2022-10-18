@@ -7,6 +7,9 @@ edition = "2021"
 
 [dependencies]
 mysql = "22.2.0"
+rmp-serde = "1.1.1"
+serde = "1.0.145"
+serde_derive = "1.0.145"
 tokio = { version = "1.21.2", features = ["full"] }
 
 # [lib]
