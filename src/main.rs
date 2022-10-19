@@ -1,14 +1,12 @@
 use std::collections::HashMap;
-use std::io::Read;
 use std::ops::Index;
 use std::str::from_utf8;
 
-use mysql::binlog::events::{EventData, RowsEventData, RowsEvent};
+use mysql::binlog::events::{EventData, RowsEventData};
 use mysql::binlog::value::BinlogValue;
 use mysql::prelude::*;
 use mysql::*;
 
-use mysql::serde_json::json;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 
@@ -17,8 +15,8 @@ extern crate serde;
 extern crate serde_derive;
 extern crate rmp_serde as rmps;
 
-use serde::{Deserialize, Serialize};
-use rmps::{Deserializer, Serializer};
+use serde::Serialize;
+use rmps::Serializer;
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
 enum IntegerValue {
@@ -83,21 +81,21 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
                             columns.push(column_name.to_string());
                         }
 
-                        let table_data = table_columns_map.get_key_value(table_name).unwrap();
-                        let table_data_bytes = format!("{:#?}", table_data).to_string();
-                        let table_data_bytes = table_data_bytes.as_bytes();
+                        // let table_data = table_columns_map.get_key_value(table_name).unwrap();
+                        // let table_data_bytes = format!("{:#?}", table_data).to_string();
+                        // let table_data_bytes = table_data_bytes.as_bytes();
 
-                        if let Err(e) = socket.write_all(table_data_bytes).await {
-                            eprintln!("failed to write to socket; err = {:?}", e);
-                        }
-                        if let Err(e) = socket.write_all(b"\n").await {
-                            eprintln!("failed to write to socket; err = {:?}", e);
-                        }
+                        // if let Err(e) = socket.write_all(table_data_bytes).await {
+                        //     eprintln!("failed to write to socket; err = {:?}", e);
+                        // }
+                        // if let Err(e) = socket.write_all(b"\n").await {
+                        //     eprintln!("failed to write to socket; err = {:?}", e);
+                        // }
                     }
                 }
             }
 
-            let request = BinlogRequest::new(1337);
+            let request = BinlogRequest::new(1338);
             let mut binlog_stream = conn.get_binlog_stream(request).unwrap();
 
             let mut table_maps: HashMap<u64, binlog::events::TableMapEvent> = HashMap::new();
@@ -113,13 +111,94 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
                         EventData::RowsEvent(data) => {
                             match data {
                                 RowsEventData::WriteRowsEvent(row_data) => {
+                                    let table_map = table_maps.get(&row_data.table_id()).unwrap();
+                                    let table_name = &table_map.table_name().to_string();
 
+                                    if let Some(table_columns) = table_columns_map.get(table_name) {
+                                        for row in row_data.rows(table_map) {
+                                            let (_before, after) = row.unwrap();
+
+                                            let after_row = after.unwrap();
+
+                                            let mut result_hash = HashMap::new();
+                                            let mut id_serialized_value: String = "".to_string();
+
+                                            result_hash.insert("table_name", table_name);
+
+                                            let id_column_index = table_columns
+                                                .iter()
+                                                .position(|name| name == "id")
+                                                .unwrap();
+
+                                            let id_ref = after_row.as_ref(id_column_index).unwrap();
+
+                                            match id_ref {
+                                                BinlogValue::Value(id_value) => {
+                                                    match *id_value {
+                                                        Value::Int(id) => {
+                                                            id_serialized_value.push_str(&id.to_string());
+                                                            result_hash.insert("id", &id_serialized_value);
+                                                        },
+                                                        _ => {}
+                                                    }
+                                                },
+                                                _ => {},
+                                            }
+
+                                            let mut changes_hash = HashMap::new();
+
+                                            for (idx, after_binlog_value) in after_row.unwrap().iter().enumerate() {
+                                                let before_state = ChangesValue::Str("".to_string());
+
+                                                let after_state = match after_binlog_value {
+                                                    BinlogValue::Value(after_value) => {
+                                                        match after_value {
+                                                            Value::NULL => { ChangesValue::Str("".into()) },
+                                                            Value::Bytes(value) => { ChangesValue::Str(from_utf8(value.as_slice()).unwrap().to_string()) },
+                                                            Value::Int(value) => { ChangesValue::Int(IntegerValue::I64(*value)) },
+                                                            Value::UInt(value) => { ChangesValue::Int(IntegerValue::U64(*value)) },
+                                                            Value::Float(value) => { ChangesValue::Float(FloatValue::F32(*value)) },
+                                                            Value::Double(value) => { ChangesValue::Float(FloatValue::F64(*value)) },
+                                                            Value::Date(y, mo, d, h, m, s, ms) => {
+                                                                let date = format!("{}, {}, {}, {}, {}, {}, {}", y, mo, d, h, m, s, ms).to_string();
+                                                                ChangesValue::Str(date)
+                                                            },
+                                                            Value::Time(signed, d, h, m, s, ms) => {
+                                                                let date = format!("{}, {}, {}, {}, {}, {}", signed, d, h, m, s, ms).to_string();
+                                                                ChangesValue::Str(date)
+                                                            },
+                                                        }
+                                                    },
+                                                    _ => { ChangesValue::Str("".into()) }
+                                                };
+
+                                                let column_name = table_columns.get(idx).unwrap();
+                                                let column_changes = vec![before_state, after_state];
+
+                                                changes_hash.insert(column_name.to_string(), column_changes);
+                                            }
+
+                                            let mut buf = Vec::new();
+                                            let event = Event {
+                                                action: "create".into(),
+                                                table_name: result_hash.get("table_name").unwrap().to_string(),
+                                                id: result_hash.get("id").unwrap().to_string(),
+                                                changes: changes_hash
+                                            };
+
+                                            event.serialize(&mut Serializer::new(&mut buf)).unwrap();
+
+                                            if let Err(e) = socket.write_all(&buf.clone()).await {
+                                                eprintln!("failed to write to socket; err = {:?}", e);
+                                            }
+                                        }
+                                    } else {
+                                        println!("[Error] Create for unknown table: {:#?}", table_name);
+                                    }
                                 },
                                 RowsEventData::UpdateRowsEvent(row_data) => {
                                     let table_map = table_maps.get(&row_data.table_id()).unwrap();
                                     let table_name = &table_map.table_name().to_string();
-
-                                    println!("table_name: {}", table_name);
 
                                     if let Some(table_columns) = table_columns_map.get(table_name) {
                                         for row in row_data.rows(table_map) {
@@ -225,16 +304,94 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
                                             if let Err(e) = socket.write_all(&buf.clone()).await {
                                                 eprintln!("failed to write to socket; err = {:?}", e);
                                             }
-                                            if let Err(e) = socket.write_all(b"\n").await {
-                                                eprintln!("failed to write to socket; err = {:?}", e);
-                                            }
                                         }
                                     } else {
                                         println!("[Error] Update for unknown table: {:#?}", table_name);
                                     }
                                 },
                                 RowsEventData::DeleteRowsEvent(row_data) => {
+                                    let table_map = table_maps.get(&row_data.table_id()).unwrap();
+                                    let table_name = &table_map.table_name().to_string();
 
+                                    if let Some(table_columns) = table_columns_map.get(table_name) {
+                                        for row in row_data.rows(table_map) {
+                                            let (before, _after) = row.unwrap();
+                                            let before_row = before.unwrap();
+
+                                            let mut result_hash = HashMap::new();
+                                            let mut id_serialized_value: String = "".to_string();
+
+                                            result_hash.insert("table_name", table_name);
+
+                                            let id_column_index = table_columns
+                                                .iter()
+                                                .position(|name| name == "id")
+                                                .unwrap();
+
+                                            let id_ref = before_row.as_ref(id_column_index).unwrap();
+
+                                            match id_ref {
+                                                BinlogValue::Value(id_value) => {
+                                                    match *id_value {
+                                                        Value::Int(id) => {
+                                                            id_serialized_value.push_str(&id.to_string());
+                                                            result_hash.insert("id", &id_serialized_value);
+                                                        },
+                                                        _ => {}
+                                                    }
+                                                },
+                                                _ => {},
+                                            }
+
+                                            let mut changes_hash = HashMap::new();
+
+                                            for (idx, before_binlog_value) in before_row.unwrap().iter().enumerate() {
+                                                let before_state = match before_binlog_value {
+                                                    BinlogValue::Value(before_value) => {
+                                                        match before_value {
+                                                            Value::NULL => { ChangesValue::Str("".into()) },
+                                                            Value::Bytes(value) => { ChangesValue::Str(from_utf8(value.as_slice()).unwrap().to_string()) },
+                                                            Value::Int(value) => { ChangesValue::Int(IntegerValue::I64(*value)) },
+                                                            Value::UInt(value) => { ChangesValue::Int(IntegerValue::U64(*value)) },
+                                                            Value::Float(value) => { ChangesValue::Float(FloatValue::F32(*value)) },
+                                                            Value::Double(value) => { ChangesValue::Float(FloatValue::F64(*value)) },
+                                                            Value::Date(y, mo, d, h, m, s, ms) => {
+                                                                let date = format!("{}, {}, {}, {}, {}, {}, {}", y, mo, d, h, m, s, ms).to_string();
+                                                                ChangesValue::Str(date)
+                                                            },
+                                                            Value::Time(signed, d, h, m, s, ms) => {
+                                                                let date = format!("{}, {}, {}, {}, {}, {}", signed, d, h, m, s, ms).to_string();
+                                                                ChangesValue::Str(date)
+                                                            },
+                                                        }
+                                                    },
+                                                    _ => { ChangesValue::Str("".into()) }
+                                                };
+
+                                                let after_state = ChangesValue::Str("".into());
+                                                let column_name = table_columns.get(idx).unwrap();
+                                                let column_changes = vec![before_state, after_state];
+
+                                                changes_hash.insert(column_name.to_string(), column_changes);
+                                            }
+
+                                            let mut buf = Vec::new();
+                                            let event = Event {
+                                                action: "delete".into(),
+                                                table_name: result_hash.get("table_name").unwrap().to_string(),
+                                                id: result_hash.get("id").unwrap().to_string(),
+                                                changes: changes_hash
+                                            };
+
+                                            event.serialize(&mut Serializer::new(&mut buf)).unwrap();
+
+                                            if let Err(e) = socket.write_all(&buf.clone()).await {
+                                                eprintln!("failed to write to socket; err = {:?}", e);
+                                            }
+                                        }
+                                    } else {
+                                        println!("[Error] Update for unknown table: {:#?}", table_name);
+                                    }
                                 },
                                 _ => {}
                             }
