@@ -1,5 +1,5 @@
 <p align="center">
-  <img width="220" height="220" src="https://user-images.githubusercontent.com/1145873/195001971-9e684f9c-757e-480c-bba1-1af8a8b61f85.png">
+  <img width="175" height="175" src="https://user-images.githubusercontent.com/1145873/195001971-9e684f9c-757e-480c-bba1-1af8a8b61f85.png">
 </p>
 
 ## Binlog Events
