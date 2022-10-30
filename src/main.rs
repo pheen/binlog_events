@@ -18,19 +18,19 @@ extern crate rmp_serde as rmps;
 use serde::Serialize;
 use rmps::Serializer;
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 enum IntegerValue {
     U64(u64),
     I64(i64)
 }
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 enum FloatValue {
     F32(f32),
     F64(f64)
 }
 
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 enum ChangesValue {
     Str(String),
     Int(IntegerValue),
@@ -41,14 +41,12 @@ enum ChangesValue {
 struct Event {
     action: String,
     table_name: String,
-    id: String,
+    attributes: HashMap<String, ChangesValue>,
     changes: HashMap<String, Vec<ChangesValue>>
 }
 
 #[tokio::main]
 async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
-    println!("Hello!");
-
     let listener = TcpListener::bind("127.0.0.1:23578").await?;
 
     loop {
@@ -97,19 +95,18 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
 
             let request = BinlogRequest::new(1338);
             let mut binlog_stream = conn.get_binlog_stream(request).unwrap();
-
             let mut table_maps: HashMap<u64, binlog::events::TableMapEvent> = HashMap::new();
 
             while let Some(binlog_data) = binlog_stream.next() {
-                let ev = binlog_data.unwrap();
+                let binlog_event = binlog_data.unwrap();
 
-                if let Some(thing) = ev.read_data().unwrap() {
-                    match thing {
-                        EventData::TableMapEvent(data) => {
-                            table_maps.insert(data.table_id(), data.into_owned());
+                if let Some(binlog_event_data) = binlog_event.read_data().unwrap() {
+                    match binlog_event_data {
+                        EventData::TableMapEvent(event_data) => {
+                            table_maps.insert(event_data.table_id(), event_data.into_owned());
                         },
-                        EventData::RowsEvent(data) => {
-                            match data {
+                        EventData::RowsEvent(event_data) => {
+                            match &event_data {
                                 RowsEventData::WriteRowsEvent(row_data) => {
                                     let table_map = table_maps.get(&row_data.table_id()).unwrap();
                                     let table_name = &table_map.table_name().to_string();
@@ -121,31 +118,11 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
                                             let after_row = after.unwrap();
 
                                             let mut result_hash = HashMap::new();
-                                            let mut id_serialized_value: String = "".to_string();
 
                                             result_hash.insert("table_name", table_name);
 
-                                            let id_column_index = table_columns
-                                                .iter()
-                                                .position(|name| name == "id")
-                                                .unwrap();
-
-                                            let id_ref = after_row.as_ref(id_column_index).unwrap();
-
-                                            match id_ref {
-                                                BinlogValue::Value(id_value) => {
-                                                    match *id_value {
-                                                        Value::Int(id) => {
-                                                            id_serialized_value.push_str(&id.to_string());
-                                                            result_hash.insert("id", &id_serialized_value);
-                                                        },
-                                                        _ => {}
-                                                    }
-                                                },
-                                                _ => {},
-                                            }
-
                                             let mut changes_hash = HashMap::new();
+                                            let mut attributes_hash = HashMap::new();
 
                                             for (idx, after_binlog_value) in after_row.unwrap().iter().enumerate() {
                                                 let before_state = ChangesValue::Str("".to_string());
@@ -173,8 +150,9 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
                                                 };
 
                                                 let column_name = table_columns.get(idx).unwrap();
-                                                let column_changes = vec![before_state, after_state];
+                                                let column_changes = vec![before_state, after_state.clone()];
 
+                                                attributes_hash.insert(column_name.to_string(), after_state);
                                                 changes_hash.insert(column_name.to_string(), column_changes);
                                             }
 
@@ -182,7 +160,7 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
                                             let event = Event {
                                                 action: "create".into(),
                                                 table_name: result_hash.get("table_name").unwrap().to_string(),
-                                                id: result_hash.get("id").unwrap().to_string(),
+                                                attributes: attributes_hash,
                                                 changes: changes_hash
                                             };
 
@@ -210,31 +188,11 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
                                             let after_row = after.unwrap();
 
                                             let mut result_hash = HashMap::new();
-                                            let mut id_serialized_value: String = "".to_string();
 
                                             result_hash.insert("table_name", table_name);
 
-                                            let id_column_index = table_columns
-                                                .iter()
-                                                .position(|name| name == "id")
-                                                .unwrap();
-
-                                            let id_ref = after_row.as_ref(id_column_index).unwrap();
-
-                                            match id_ref {
-                                                BinlogValue::Value(id_value) => {
-                                                    match *id_value {
-                                                        Value::Int(id) => {
-                                                            id_serialized_value.push_str(&id.to_string());
-                                                            result_hash.insert("id", &id_serialized_value);
-                                                        },
-                                                        _ => {}
-                                                    }
-                                                },
-                                                _ => {},
-                                            }
-
                                             let mut changes_hash = HashMap::new();
+                                            let mut attributes_hash = HashMap::new();
 
                                             for (idx, after_binlog_value) in after_row.unwrap().iter().enumerate() {
                                                 let before_binlog_value = before_state.get(idx).unwrap_or_else(|| &BinlogValue::Value(Value::NULL));
@@ -285,6 +243,8 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
 
                                                 let column_name = table_columns.get(idx).unwrap();
 
+                                                attributes_hash.insert(column_name.to_string(), after_state.clone());
+
                                                 if before_state != after_state {
                                                     let column_changes = vec![before_state, after_state];
                                                     changes_hash.insert(column_name.to_string(), column_changes);
@@ -295,7 +255,7 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
                                             let event = Event {
                                                 action: "update".into(),
                                                 table_name: result_hash.get("table_name").unwrap().to_string(),
-                                                id: result_hash.get("id").unwrap().to_string(),
+                                                attributes: attributes_hash,
                                                 changes: changes_hash
                                             };
 
@@ -319,31 +279,11 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
                                             let before_row = before.unwrap();
 
                                             let mut result_hash = HashMap::new();
-                                            let mut id_serialized_value: String = "".to_string();
 
                                             result_hash.insert("table_name", table_name);
 
-                                            let id_column_index = table_columns
-                                                .iter()
-                                                .position(|name| name == "id")
-                                                .unwrap();
-
-                                            let id_ref = before_row.as_ref(id_column_index).unwrap();
-
-                                            match id_ref {
-                                                BinlogValue::Value(id_value) => {
-                                                    match *id_value {
-                                                        Value::Int(id) => {
-                                                            id_serialized_value.push_str(&id.to_string());
-                                                            result_hash.insert("id", &id_serialized_value);
-                                                        },
-                                                        _ => {}
-                                                    }
-                                                },
-                                                _ => {},
-                                            }
-
                                             let mut changes_hash = HashMap::new();
+                                            let mut attributes_hash = HashMap::new();
 
                                             for (idx, before_binlog_value) in before_row.unwrap().iter().enumerate() {
                                                 let before_state = match before_binlog_value {
@@ -370,8 +310,9 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
 
                                                 let after_state = ChangesValue::Str("".into());
                                                 let column_name = table_columns.get(idx).unwrap();
-                                                let column_changes = vec![before_state, after_state];
+                                                let column_changes = vec![before_state, after_state.clone()];
 
+                                                attributes_hash.insert(column_name.to_string(), after_state);
                                                 changes_hash.insert(column_name.to_string(), column_changes);
                                             }
 
@@ -379,7 +320,7 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
                                             let event = Event {
                                                 action: "delete".into(),
                                                 table_name: result_hash.get("table_name").unwrap().to_string(),
-                                                id: result_hash.get("id").unwrap().to_string(),
+                                                attributes: attributes_hash,
                                                 changes: changes_hash
                                             };
 
@@ -395,6 +336,8 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
                                 },
                                 _ => {}
                             }
+
+                            table_maps.remove(&event_data.table_id());
                         },
                         _ => {}
                     }
