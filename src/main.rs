@@ -15,26 +15,26 @@ extern crate serde;
 extern crate serde_derive;
 extern crate rmp_serde as rmps;
 
-use serde::Serialize;
 use rmps::Serializer;
+use serde::Serialize;
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 enum IntegerValue {
     U64(u64),
-    I64(i64)
+    I64(i64),
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 enum FloatValue {
     F32(f32),
-    F64(f64)
+    F64(f64),
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize, Clone)]
 enum ChangesValue {
     Str(String),
     Int(IntegerValue),
-    Float(FloatValue)
+    Float(FloatValue),
 }
 
 #[derive(Debug, PartialEq, Deserialize, Serialize)]
@@ -42,7 +42,7 @@ struct Event {
     action: String,
     table_name: String,
     attributes: HashMap<String, ChangesValue>,
-    changes: HashMap<String, Vec<ChangesValue>>
+    changes: HashMap<String, Vec<ChangesValue>>,
 }
 
 #[tokio::main]
@@ -104,7 +104,7 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
                     match binlog_event_data {
                         EventData::TableMapEvent(event_data) => {
                             table_maps.insert(event_data.table_id(), event_data.into_owned());
-                        },
+                        }
                         EventData::RowsEvent(event_data) => {
                             match &event_data {
                                 RowsEventData::WriteRowsEvent(row_data) => {
@@ -124,56 +124,105 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
                                             let mut changes_hash = HashMap::new();
                                             let mut attributes_hash = HashMap::new();
 
-                                            for (idx, after_binlog_value) in after_row.unwrap().iter().enumerate() {
-                                                let before_state = ChangesValue::Str("".to_string());
+                                            for (idx, after_binlog_value) in
+                                                after_row.unwrap().iter().enumerate()
+                                            {
+                                                let before_state =
+                                                    ChangesValue::Str("".to_string());
 
                                                 let after_state = match after_binlog_value {
                                                     BinlogValue::Value(after_value) => {
                                                         match after_value {
-                                                            Value::NULL => { ChangesValue::Str("".into()) },
-                                                            Value::Bytes(value) => { ChangesValue::Str(from_utf8(value.as_slice()).unwrap().to_string()) },
-                                                            Value::Int(value) => { ChangesValue::Int(IntegerValue::I64(*value)) },
-                                                            Value::UInt(value) => { ChangesValue::Int(IntegerValue::U64(*value)) },
-                                                            Value::Float(value) => { ChangesValue::Float(FloatValue::F32(*value)) },
-                                                            Value::Double(value) => { ChangesValue::Float(FloatValue::F64(*value)) },
+                                                            Value::NULL => {
+                                                                ChangesValue::Str("".into())
+                                                            }
+                                                            Value::Bytes(value) => {
+                                                                ChangesValue::Str(
+                                                                    from_utf8(value.as_slice())
+                                                                        .unwrap()
+                                                                        .to_string(),
+                                                                )
+                                                            }
+                                                            Value::Int(value) => ChangesValue::Int(
+                                                                IntegerValue::I64(*value),
+                                                            ),
+                                                            Value::UInt(value) => {
+                                                                ChangesValue::Int(
+                                                                    IntegerValue::U64(*value),
+                                                                )
+                                                            }
+                                                            Value::Float(value) => {
+                                                                ChangesValue::Float(
+                                                                    FloatValue::F32(*value),
+                                                                )
+                                                            }
+                                                            Value::Double(value) => {
+                                                                ChangesValue::Float(
+                                                                    FloatValue::F64(*value),
+                                                                )
+                                                            }
                                                             Value::Date(y, mo, d, h, m, s, ms) => {
-                                                                let date = format!("{}, {}, {}, {}, {}, {}, {}", y, mo, d, h, m, s, ms).to_string();
+                                                                let date = format!(
+                                                                    "{}, {}, {}, {}, {}, {}, {}",
+                                                                    y, mo, d, h, m, s, ms
+                                                                )
+                                                                .to_string();
                                                                 ChangesValue::Str(date)
-                                                            },
+                                                            }
                                                             Value::Time(signed, d, h, m, s, ms) => {
-                                                                let date = format!("{}, {}, {}, {}, {}, {}", signed, d, h, m, s, ms).to_string();
+                                                                let date = format!(
+                                                                    "{}, {}, {}, {}, {}, {}",
+                                                                    signed, d, h, m, s, ms
+                                                                )
+                                                                .to_string();
                                                                 ChangesValue::Str(date)
-                                                            },
+                                                            }
                                                         }
-                                                    },
-                                                    _ => { ChangesValue::Str("".into()) }
+                                                    }
+                                                    _ => ChangesValue::Str("".into()),
                                                 };
 
                                                 let column_name = table_columns.get(idx).unwrap();
-                                                let column_changes = vec![before_state, after_state.clone()];
+                                                let column_changes =
+                                                    vec![before_state, after_state.clone()];
 
-                                                attributes_hash.insert(column_name.to_string(), after_state);
-                                                changes_hash.insert(column_name.to_string(), column_changes);
+                                                attributes_hash
+                                                    .insert(column_name.to_string(), after_state);
+                                                changes_hash.insert(
+                                                    column_name.to_string(),
+                                                    column_changes,
+                                                );
                                             }
 
                                             let mut buf = Vec::new();
                                             let event = Event {
                                                 action: "create".into(),
-                                                table_name: result_hash.get("table_name").unwrap().to_string(),
+                                                table_name: result_hash
+                                                    .get("table_name")
+                                                    .unwrap()
+                                                    .to_string(),
                                                 attributes: attributes_hash,
-                                                changes: changes_hash
+                                                changes: changes_hash,
                                             };
 
-                                            event.serialize(&mut Serializer::new(&mut buf)).unwrap();
+                                            event
+                                                .serialize(&mut Serializer::new(&mut buf))
+                                                .unwrap();
 
                                             if let Err(e) = socket.write_all(&buf.clone()).await {
-                                                eprintln!("failed to write to socket; err = {:?}", e);
+                                                eprintln!(
+                                                    "failed to write to socket; err = {:?}",
+                                                    e
+                                                );
                                             }
                                         }
                                     } else {
-                                        println!("[Error] Create for unknown table: {:#?}", table_name);
+                                        println!(
+                                            "[Error] Create for unknown table: {:#?}",
+                                            table_name
+                                        );
                                     }
-                                },
+                                }
                                 RowsEventData::UpdateRowsEvent(row_data) => {
                                     let table_map = table_maps.get(&row_data.table_id()).unwrap();
                                     let table_name = &table_map.table_name().to_string();
@@ -194,81 +243,164 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
                                             let mut changes_hash = HashMap::new();
                                             let mut attributes_hash = HashMap::new();
 
-                                            for (idx, after_binlog_value) in after_row.unwrap().iter().enumerate() {
-                                                let before_binlog_value = before_state.get(idx).unwrap_or_else(|| &BinlogValue::Value(Value::NULL));
+                                            for (idx, after_binlog_value) in
+                                                after_row.unwrap().iter().enumerate()
+                                            {
+                                                let before_binlog_value =
+                                                    before_state.get(idx).unwrap_or_else(|| {
+                                                        &BinlogValue::Value(Value::NULL)
+                                                    });
 
                                                 let before_state = match before_binlog_value {
                                                     BinlogValue::Value(before_value) => {
                                                         match before_value {
-                                                            Value::NULL => { ChangesValue::Str("".into()) },
-                                                            Value::Bytes(value) => { ChangesValue::Str(from_utf8(value.as_slice()).unwrap().to_string()) },
-                                                            Value::Int(value) => { ChangesValue::Int(IntegerValue::I64(*value)) },
-                                                            Value::UInt(value) => { ChangesValue::Int(IntegerValue::U64(*value)) },
-                                                            Value::Float(value) => { ChangesValue::Float(FloatValue::F32(*value)) },
-                                                            Value::Double(value) => { ChangesValue::Float(FloatValue::F64(*value)) },
+                                                            Value::NULL => {
+                                                                ChangesValue::Str("".into())
+                                                            }
+                                                            Value::Bytes(value) => {
+                                                                ChangesValue::Str(
+                                                                    from_utf8(value.as_slice())
+                                                                        .unwrap()
+                                                                        .to_string(),
+                                                                )
+                                                            }
+                                                            Value::Int(value) => ChangesValue::Int(
+                                                                IntegerValue::I64(*value),
+                                                            ),
+                                                            Value::UInt(value) => {
+                                                                ChangesValue::Int(
+                                                                    IntegerValue::U64(*value),
+                                                                )
+                                                            }
+                                                            Value::Float(value) => {
+                                                                ChangesValue::Float(
+                                                                    FloatValue::F32(*value),
+                                                                )
+                                                            }
+                                                            Value::Double(value) => {
+                                                                ChangesValue::Float(
+                                                                    FloatValue::F64(*value),
+                                                                )
+                                                            }
                                                             Value::Date(y, mo, d, h, m, s, ms) => {
-                                                                let date = format!("{}, {}, {}, {}, {}, {}, {}", y, mo, d, h, m, s, ms).to_string();
+                                                                let date = format!(
+                                                                    "{}, {}, {}, {}, {}, {}, {}",
+                                                                    y, mo, d, h, m, s, ms
+                                                                )
+                                                                .to_string();
                                                                 ChangesValue::Str(date)
-                                                            },
+                                                            }
                                                             Value::Time(signed, d, h, m, s, ms) => {
-                                                                let date = format!("{}, {}, {}, {}, {}, {}", signed, d, h, m, s, ms).to_string();
+                                                                let date = format!(
+                                                                    "{}, {}, {}, {}, {}, {}",
+                                                                    signed, d, h, m, s, ms
+                                                                )
+                                                                .to_string();
                                                                 ChangesValue::Str(date)
-                                                            },
+                                                            }
                                                         }
-                                                    },
-                                                    _ => { ChangesValue::Str("".into()) }
+                                                    }
+                                                    _ => ChangesValue::Str("".into()),
                                                 };
 
                                                 let after_state = match after_binlog_value {
                                                     BinlogValue::Value(after_value) => {
                                                         match after_value {
-                                                            Value::NULL => { ChangesValue::Str("".into()) },
-                                                            Value::Bytes(value) => { ChangesValue::Str(from_utf8(value.as_slice()).unwrap().to_string()) },
-                                                            Value::Int(value) => { ChangesValue::Int(IntegerValue::I64(*value)) },
-                                                            Value::UInt(value) => { ChangesValue::Int(IntegerValue::U64(*value)) },
-                                                            Value::Float(value) => { ChangesValue::Float(FloatValue::F32(*value)) },
-                                                            Value::Double(value) => { ChangesValue::Float(FloatValue::F64(*value)) },
+                                                            Value::NULL => {
+                                                                ChangesValue::Str("".into())
+                                                            }
+                                                            Value::Bytes(value) => {
+                                                                ChangesValue::Str(
+                                                                    from_utf8(value.as_slice())
+                                                                        .unwrap()
+                                                                        .to_string(),
+                                                                )
+                                                            }
+                                                            Value::Int(value) => ChangesValue::Int(
+                                                                IntegerValue::I64(*value),
+                                                            ),
+                                                            Value::UInt(value) => {
+                                                                ChangesValue::Int(
+                                                                    IntegerValue::U64(*value),
+                                                                )
+                                                            }
+                                                            Value::Float(value) => {
+                                                                ChangesValue::Float(
+                                                                    FloatValue::F32(*value),
+                                                                )
+                                                            }
+                                                            Value::Double(value) => {
+                                                                ChangesValue::Float(
+                                                                    FloatValue::F64(*value),
+                                                                )
+                                                            }
                                                             Value::Date(y, mo, d, h, m, s, ms) => {
-                                                                let date = format!("{}, {}, {}, {}, {}, {}, {}", y, mo, d, h, m, s, ms).to_string();
+                                                                let date = format!(
+                                                                    "{}, {}, {}, {}, {}, {}, {}",
+                                                                    y, mo, d, h, m, s, ms
+                                                                )
+                                                                .to_string();
                                                                 ChangesValue::Str(date)
-                                                            },
+                                                            }
                                                             Value::Time(signed, d, h, m, s, ms) => {
-                                                                let date = format!("{}, {}, {}, {}, {}, {}", signed, d, h, m, s, ms).to_string();
+                                                                let date = format!(
+                                                                    "{}, {}, {}, {}, {}, {}",
+                                                                    signed, d, h, m, s, ms
+                                                                )
+                                                                .to_string();
                                                                 ChangesValue::Str(date)
-                                                            },
+                                                            }
                                                         }
-                                                    },
-                                                    _ => { ChangesValue::Str("".into()) }
+                                                    }
+                                                    _ => ChangesValue::Str("".into()),
                                                 };
 
                                                 let column_name = table_columns.get(idx).unwrap();
 
-                                                attributes_hash.insert(column_name.to_string(), after_state.clone());
+                                                attributes_hash.insert(
+                                                    column_name.to_string(),
+                                                    after_state.clone(),
+                                                );
 
                                                 if before_state != after_state {
-                                                    let column_changes = vec![before_state, after_state];
-                                                    changes_hash.insert(column_name.to_string(), column_changes);
+                                                    let column_changes =
+                                                        vec![before_state, after_state];
+                                                    changes_hash.insert(
+                                                        column_name.to_string(),
+                                                        column_changes,
+                                                    );
                                                 }
                                             }
 
                                             let mut buf = Vec::new();
                                             let event = Event {
                                                 action: "update".into(),
-                                                table_name: result_hash.get("table_name").unwrap().to_string(),
+                                                table_name: result_hash
+                                                    .get("table_name")
+                                                    .unwrap()
+                                                    .to_string(),
                                                 attributes: attributes_hash,
-                                                changes: changes_hash
+                                                changes: changes_hash,
                                             };
 
-                                            event.serialize(&mut Serializer::new(&mut buf)).unwrap();
+                                            event
+                                                .serialize(&mut Serializer::new(&mut buf))
+                                                .unwrap();
 
                                             if let Err(e) = socket.write_all(&buf.clone()).await {
-                                                eprintln!("failed to write to socket; err = {:?}", e);
+                                                eprintln!(
+                                                    "failed to write to socket; err = {:?}",
+                                                    e
+                                                );
                                             }
                                         }
                                     } else {
-                                        println!("[Error] Update for unknown table: {:#?}", table_name);
+                                        println!(
+                                            "[Error] Update for unknown table: {:#?}",
+                                            table_name
+                                        );
                                     }
-                                },
+                                }
                                 RowsEventData::DeleteRowsEvent(row_data) => {
                                     let table_map = table_maps.get(&row_data.table_id()).unwrap();
                                     let table_name = &table_map.table_name().to_string();
@@ -285,60 +417,108 @@ async fn main() -> core::result::Result<(), Box<dyn std::error::Error>> {
                                             let mut changes_hash = HashMap::new();
                                             let mut attributes_hash = HashMap::new();
 
-                                            for (idx, before_binlog_value) in before_row.unwrap().iter().enumerate() {
+                                            for (idx, before_binlog_value) in
+                                                before_row.unwrap().iter().enumerate()
+                                            {
                                                 let before_state = match before_binlog_value {
                                                     BinlogValue::Value(before_value) => {
                                                         match before_value {
-                                                            Value::NULL => { ChangesValue::Str("".into()) },
-                                                            Value::Bytes(value) => { ChangesValue::Str(from_utf8(value.as_slice()).unwrap().to_string()) },
-                                                            Value::Int(value) => { ChangesValue::Int(IntegerValue::I64(*value)) },
-                                                            Value::UInt(value) => { ChangesValue::Int(IntegerValue::U64(*value)) },
-                                                            Value::Float(value) => { ChangesValue::Float(FloatValue::F32(*value)) },
-                                                            Value::Double(value) => { ChangesValue::Float(FloatValue::F64(*value)) },
+                                                            Value::NULL => {
+                                                                ChangesValue::Str("".into())
+                                                            }
+                                                            Value::Bytes(value) => {
+                                                                ChangesValue::Str(
+                                                                    from_utf8(value.as_slice())
+                                                                        .unwrap()
+                                                                        .to_string(),
+                                                                )
+                                                            }
+                                                            Value::Int(value) => ChangesValue::Int(
+                                                                IntegerValue::I64(*value),
+                                                            ),
+                                                            Value::UInt(value) => {
+                                                                ChangesValue::Int(
+                                                                    IntegerValue::U64(*value),
+                                                                )
+                                                            }
+                                                            Value::Float(value) => {
+                                                                ChangesValue::Float(
+                                                                    FloatValue::F32(*value),
+                                                                )
+                                                            }
+                                                            Value::Double(value) => {
+                                                                ChangesValue::Float(
+                                                                    FloatValue::F64(*value),
+                                                                )
+                                                            }
                                                             Value::Date(y, mo, d, h, m, s, ms) => {
-                                                                let date = format!("{}, {}, {}, {}, {}, {}, {}", y, mo, d, h, m, s, ms).to_string();
+                                                                let date = format!(
+                                                                    "{}, {}, {}, {}, {}, {}, {}",
+                                                                    y, mo, d, h, m, s, ms
+                                                                )
+                                                                .to_string();
                                                                 ChangesValue::Str(date)
-                                                            },
+                                                            }
                                                             Value::Time(signed, d, h, m, s, ms) => {
-                                                                let date = format!("{}, {}, {}, {}, {}, {}", signed, d, h, m, s, ms).to_string();
+                                                                let date = format!(
+                                                                    "{}, {}, {}, {}, {}, {}",
+                                                                    signed, d, h, m, s, ms
+                                                                )
+                                                                .to_string();
                                                                 ChangesValue::Str(date)
-                                                            },
+                                                            }
                                                         }
-                                                    },
-                                                    _ => { ChangesValue::Str("".into()) }
+                                                    }
+                                                    _ => ChangesValue::Str("".into()),
                                                 };
 
                                                 let after_state = ChangesValue::Str("".into());
                                                 let column_name = table_columns.get(idx).unwrap();
-                                                let column_changes = vec![before_state, after_state.clone()];
+                                                let column_changes =
+                                                    vec![before_state, after_state.clone()];
 
-                                                attributes_hash.insert(column_name.to_string(), after_state);
-                                                changes_hash.insert(column_name.to_string(), column_changes);
+                                                attributes_hash
+                                                    .insert(column_name.to_string(), after_state);
+                                                changes_hash.insert(
+                                                    column_name.to_string(),
+                                                    column_changes,
+                                                );
                                             }
 
                                             let mut buf = Vec::new();
                                             let event = Event {
                                                 action: "delete".into(),
-                                                table_name: result_hash.get("table_name").unwrap().to_string(),
+                                                table_name: result_hash
+                                                    .get("table_name")
+                                                    .unwrap()
+                                                    .to_string(),
                                                 attributes: attributes_hash,
-                                                changes: changes_hash
+                                                changes: changes_hash,
                                             };
 
-                                            event.serialize(&mut Serializer::new(&mut buf)).unwrap();
+                                            event
+                                                .serialize(&mut Serializer::new(&mut buf))
+                                                .unwrap();
 
                                             if let Err(e) = socket.write_all(&buf.clone()).await {
-                                                eprintln!("failed to write to socket; err = {:?}", e);
+                                                eprintln!(
+                                                    "failed to write to socket; err = {:?}",
+                                                    e
+                                                );
                                             }
                                         }
                                     } else {
-                                        println!("[Error] Update for unknown table: {:#?}", table_name);
+                                        println!(
+                                            "[Error] Update for unknown table: {:#?}",
+                                            table_name
+                                        );
                                     }
-                                },
+                                }
                                 _ => {}
                             }
 
                             table_maps.remove(&event_data.table_id());
-                        },
+                        }
                         _ => {}
                     }
                 }
